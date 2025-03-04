@@ -5,8 +5,13 @@ from database import Base, engine
 def init_db():
     Base.metadata.create_all(bind=engine)
 
+app = FastAPI()
+app.include_router(endpoints.router)
+
+init_db()
+
 if __name__ == "__main__":
-    init_db()
-    app = FastAPI()
-    app.include_router(endpoints.router)
+    import uvicorn
+    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+
     

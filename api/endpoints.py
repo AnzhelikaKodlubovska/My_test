@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, File, UploadFile
 from sqlalchemy.orm import Session
 from typing import List, Dict, Any
-from datetime import date, timedelta
+from datetime import date
 import pandas as pd
 
 from models.credit import User, Credit, Dictionary, Plan, Payment
@@ -45,6 +45,7 @@ def get_user_credits(user_id: int, db: Session = Depends(get_db)):
 
     return credit_list
 
+
 @router.post("/plans_insert")
 def insert_plans(file: UploadFile = File(...), db: Session = Depends(get_db)):
     try:
@@ -59,7 +60,7 @@ def insert_plans(file: UploadFile = File(...), db: Session = Depends(get_db)):
             sum_amount = row["сума"]
 
             if pd.isna(sum_amount):
-              raise ValueError("Sum cannot be empty")
+                raise ValueError("Sum cannot be empty")
 
             if period.day != 1:
                 raise ValueError("Month should start with the first day")
@@ -85,16 +86,89 @@ def insert_plans(file: UploadFile = File(...), db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Plans uploaded successfully"}
 
+
 @router.get("/plans_performance")
 def get_plans_performance(date_str: str, db: Session = Depends(get_db)):
     target_date = pd.to_datetime(date_str).date()
     start_of_month = target_date.replace(day=1)
 
-    plans = db.query(Plan).filter(Plan.period <= target_date).all()
+    plans = db.query(Plan).filter(Plan.period == start_of_month).all()
     performance_data = []
+
+    for plan in plans:
+        category = db.query(Dictionary).filter(Dictionary.id == plan.category_id).first()
+        if not category:
+            continue  
+
+        if category.name.lower() == "видача":  
+            actual_sum = (
+                db.query(Credit.body)
+                .filter(Credit.issuance_date >= start_of_month, Credit.issuance_date <= target_date)
+                .scalar() or 0
+            )
+        elif category.name.lower() == "збір":  
+            actual_sum = (
+                db.query(Payment.sum)
+                .join(Credit)
+                .filter(
+                    Payment.payment_date >= start_of_month,
+                    Payment.payment_date <= target_date
+                )
+                .scalar() or 0
+            )
+        else:
+            actual_sum = 0
+
+        performance = (actual_sum / plan.sum) * 100 if plan.sum > 0 else 0
+
+        performance_data.append({
+            "month": start_of_month.strftime("%Y-%m"),
+            "category": category.name,
+            "planned_sum": plan.sum,
+            "actual_sum": actual_sum,
+            "performance_percent": round(performance, 2)
+        })
 
     return performance_data
 
+
 @router.get("/year_performance")
 def get_year_performance(year: int, db: Session = Depends(get_db)):
-    return {}
+    start_of_year = date(year, 1, 1)
+    end_of_year = date(year, 12, 31)
+
+    plans = db.query(Plan).filter(Plan.period >= start_of_year, Plan.period <= end_of_year).all()
+    performance_data = {}
+
+    for plan in plans:
+        category = db.query(Dictionary).filter(Dictionary.id == plan.category_id).first()
+        if not category:
+            continue  
+        if category.name.lower() == "видача":
+            actual_sum = (
+                db.query(sum(Credit.body))
+                .filter(Credit.issuance_date >= plan.period, Credit.issuance_date <= end_of_year)
+                .scalar() or 0
+            )
+        elif category.name.lower() == "збір":
+            actual_sum = (
+                db.query(sum(Payment.sum))
+                .join(Credit)
+                .filter(Payment.payment_date >= plan.period, Payment.payment_date <= end_of_year)
+                .scalar() or 0
+            )
+        else:
+            actual_sum = 0
+
+        if category.name not in performance_data:
+            performance_data[category.name] = {"planned_sum": 0, "actual_sum": 0}
+
+        performance_data[category.name]["planned_sum"] += plan.sum
+        performance_data[category.name]["actual_sum"] += actual_sum
+
+    for category, data in performance_data.items():
+        planned = data["planned_sum"]
+        actual = data["actual_sum"]
+        performance_data[category]["performance_percent"] = round((actual / planned) * 100 if planned > 0 else 0, 2)
+
+    return performance_data

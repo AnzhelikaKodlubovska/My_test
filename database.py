@@ -27,3 +27,4 @@ try:
 except Exception as e:
     print(f"Помилка підключення до бази даних: {e}")
  
+ 
